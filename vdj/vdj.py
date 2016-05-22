@@ -254,20 +254,20 @@ def peak_rois(peaks, r):
     return rois
 
 
-def filter_rois(ic, rois, thresh_std=(1, 1)):
+def filter_rois(im, rois, thresh_std=(1, 1)):
     """
     Draw square ROIs around peaks.
 
     Parameters
     ----------
-    ic : list of images
-        Images to use in analysis.
+    ic : ndarray
+        Image to use in filtering ROIS
     rois : list of slice objects
         List of ROIs to consider.
     thresh_std : 2-tuple
-        If m is the mean intensity present in all ROIs in ic[0]
+        If m is the mean intensity present in all ROIs in im
         and s is the standard deviation of intensities in the ROIs
-        in ic[0], them we only keep ROIs with total intensity between
+        in im, them we only keep ROIs with total intensity between
         m - thresh_std[0] * s and m + thresh_std[1] * s.
 
     Returns
@@ -279,7 +279,7 @@ def filter_rois(ic, rois, thresh_std=(1, 1)):
     """
 
     # Comute intensities in ROI
-    roi_ints = np.array([ic[0][roi].sum() for roi in rois])
+    roi_ints = np.array([im[roi].sum() for roi in rois])
 
     # Determine thresholds
     thresh_high = roi_ints.mean() + thresh_std[0] * roi_ints.std()
