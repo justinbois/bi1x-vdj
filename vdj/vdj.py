@@ -42,6 +42,65 @@ def good_frames(ic, frac_diff=0.95, bad_frames=[], return_covs=False):
     else:
         return gf
 
+def cross_corr(im_1_fft, im_2_fft):
+    """
+    Find shift from im_1 to im_2 that maximizes cross-correlation
+
+    Parameters
+    ----------
+    im_1 : ndarray
+        2D FFT of first image
+    im_2 : ndarray
+        2D FFT of second image
+
+    Returns
+    -------
+    output : ndarray, shape (2,)
+        Shift in the row, column direction of one image to the next.
+        This is given to integer pixel accuracy.
+    """
+    # Compute correlation using spectral theorem
+    ccoeff = np.fft.fftshift((np.fft.ifft2(np.conj(im_1_fft) * im_2_fft)).real)
+
+    # Normalize and find maximum
+    if not (ccoeff == 0.0).all():
+        ccoeff /= ccoeff.max()  # Normalize
+    max_ind = np.nonzero(ccoeff == ccoeff.max())
+
+    # Return shift
+    return np.array([max_ind[0][0] - im_1_fft.shape[0]//2,
+                     max_ind[1][0] - im_1_fft.shape[1]//2])
+
+
+def drift_correct(ic):
+    """
+    Perform drift correction by cross-correlation with the first frame.
+
+    Parameters
+    ----------
+    ic : list of ndarrays
+        List of images.
+
+    Returns
+    -------
+    output : list of ndarrays
+        Zero-padded drift-corrected images.
+    """
+
+    # Compute FFTs of all images
+    ic_fft = [np.fft.fft2(im) for im in ic]
+
+    ic_out = [ic[0]]
+    for i, im in enumerate(ic[1:]):
+        shift = cross_corr(ic_fft[0], ic_fft[i])
+
+        pad = np.abs(shift).max()
+        im_out = np.pad(im, np.abs(shift).max(), 'constant')
+        ic_out.append(im_out[pad+shift[0]:pad+shift[0]+im.shape[0],
+                             pad+shift[1]:pad+shift[1]+im.shape[1]])
+
+    return ic_out
+
 
 def preprocess(im, sigma=1, selem_width=5, neg_im=False):
     """
@@ -195,24 +254,6 @@ def peak_rois(peaks, r):
     return rois
 
 
-def centroid_mag(im):
-    """
-    Return magnitude of the centroid of an image
-
-    Parameters
-    ----------
-    im : ndarray
-        Image for which to compute centroid
-
-    Returns
-    -------
-    output : float
-        Magnitude of the centroid.
-    """
-    m = skimage.measure.moments(im, order=1)
-    return np.sqrt(m[0,1]**2 + m[1,0]**2) / m[0,0]
-
-
 def filter_rois(ic, rois, thresh_std=(1, 1)):
     """
     Draw square ROIs around peaks.
@@ -247,6 +288,116 @@ def filter_rois(ic, rois, thresh_std=(1, 1)):
     # Only keep ROIs with intensity within threshold
     return [roi for i, roi in enumerate(rois)
                     if roi_ints[i] < thresh_high and roi_ints[i] > thresh_low]
+
+
+def n_peaks_in_rois(peaks, rois):
+    """
+    Compute number of peaks in each ROI in each image.
+
+    Parameters
+    ----------
+    peaks : list of ndarrays of type bool
+        List of Boolean images that are True where a peak was detected
+        and False elsewhere.
+    rois : list of slice objects
+        ROIs in which to check for peaks.
+
+    Returns
+    -------
+    output : ndarray, shape (len(rois), len(peaks)), dtype int
+        Entry i,j is the number of peaks in ROI i in frame j.
+    """
+    n_peaks = np.empty((len(rois), len(peaks)), dtype=int)
+
+    for j, peak in enumerate(peaks):
+        for i, roi in enumerate(rois):
+            n_peaks[i,j] = peak[roi].sum()
+
+    return n_peaks
+
+
+def detect_bead_loss(t, n_peaks, n_frames=5, frac=0.75):
+    """
+    Detect when a bead is lost.  An ROI is said to lose a bead when
+    frac of n_frames consecutive frames have zero beads.
+
+    Parameters
+    ----------
+    t : ndarray
+        Time points of frames
+    n_peaks : ndarray, shape (len(t), )
+        Entry i is the number of peaks in a given ROI.
+    n_frames : int
+        Number of consecutive frames to consider for bead loss.
+    frac : float
+        Fraction of frames within n_frames that must be beadless for
+        the bead to be considered lost.
+
+    Returns
+    -------
+    output : float
+        The time when the bead was lost.  Returns -1 if the bead was
+        not lost.
+    """
+    bead_intact = True
+    i = 0
+    while bead_intact and i < len(t) - n_frames:
+        if n_peaks[i] == 0 and \
+                (n_peaks[i:i+n_frames] == 0).sum() / n_frames >= frac:
+            bead_intact = False
+        i += 1
+
+    if bead_intact:
+        return -1
+    else:
+        return t[i]
+
+
+def all_bead_loss(t, n_peaks_all, n_frames=5, frac=0.75):
+    """
+    Detect bead loss in all frames.
+
+    Parameters
+    ----------
+    t : ndarray
+        Time points of frames
+    n_peaks_all : ndarray, shape (len(rois), len(peaks)), dtype int
+        Entry i,j is the number of peaks in ROI i in frame j.
+    n_frames : int
+        Number of consecutive frames to consider for bead loss.
+    frac : float
+        Fraction of frames within n_frames that must be beadless for
+        the bead to be considered lost.
+
+    Returns
+    -------
+    beads_lost : ndarray, dtype int
+        The indices of the beads that were lost.
+    t_lost : ndarray, dtype float
+        The times when the bead were lost.
+    """
+    loss_times = [detect_bead_loss(t, n_peaks, n_frames=n_frames, frac=frac)
+                        for n_peaks in n_peaks_all]
+    loss_times = np.array(loss_times)
+    return np.nonzero(loss_times != -1)[0], loss_times[loss_times != -1]
+
+
+def centroid_mag(im):
+    """
+    Return magnitude of the centroid of an image
+
+    Parameters
+    ----------
+    im : ndarray
+        Image for which to compute centroid
+
+    Returns
+    -------
+    output : float
+        Magnitude of the centroid.
+    """
+    m = skimage.measure.moments(im, order=1)
+    return np.sqrt(m[0,1]**2 + m[1,0]**2) / m[0,0]
 
 
 def fiducial_beads(ic, rois, peaks, n_frames=5, n_fiducial=11):
@@ -310,7 +461,7 @@ def fiducial_beads(ic, rois, peaks, n_frames=5, n_fiducial=11):
     return fid_peaks
 
 
-def drift_correct(ic, peaks, fid_peaks):
+def drift_correct_fiducial(ic, peaks, fid_peaks):
     """
     Perform drift correction
     """
@@ -330,12 +481,14 @@ def drift_correct(ic, peaks, fid_peaks):
         # Find the index closest to fiducial peaks
         fid = np.array([peaks_ind[i][kd.query(fp)[1]] for fp in fid_0])
 
-        # Compute drift and shift
-        drift_mag = (fid[:,0] - fid_0[:,0])**2 + (fid[:,1] - fid_0[:,1])**2
-        j = np.argwhere(drift_mag == np.median(drift_mag))[0][0]
-        shift += np.array([fid[j,0] - fid_0[j,0], fid[j,1] - fid_0[j,1]])
+        # Compute drift
+        drift_i = int(np.median(fid[:,0] - fid_0[:,0]))
+        drift_j = int(np.median(fid[:,1] - fid_0[:,1]))
 
-        print(drift_mag)
+        # Update shift
+        shift += np.array([drift_i, drift_j])
+
+        print(shift)
 
         # Make shifted output image
         pad = np.abs(shift).max()
