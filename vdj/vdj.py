@@ -85,21 +85,27 @@ def drift_correct(ic):
     -------
     output : list of ndarrays
         Zero-padded drift-corrected images.
+    max_shift : int
+        Maximum shift in any direction.
     """
 
     # Compute FFTs of all images
     ic_fft = [np.fft.fft2(im) for im in ic]
 
     ic_out = [ic[0]]
+    max_shift = 0
     for i, im in enumerate(ic[1:]):
         shift = cross_corr(ic_fft[0], ic_fft[i])
-
         pad = np.abs(shift).max()
-        im_out = np.pad(im, np.abs(shift).max(), 'constant')
+
+        if pad > max_shift:
+            max_shift = pad
+
+        im_out = np.pad(im, pad, 'constant')
         ic_out.append(im_out[pad+shift[0]:pad+shift[0]+im.shape[0],
                              pad+shift[1]:pad+shift[1]+im.shape[1]])
 
-    return ic_out
+    return ic_out, max_shift
 
 
 def preprocess(im, sigma=1, selem_width=5, neg_im=False):
@@ -150,7 +156,7 @@ def preprocess(im, sigma=1, selem_width=5, neg_im=False):
     return np.maximum(bg_subtracted_image, 0)
 
 
-def get_peaks(im, particle_size=3, thresh_abs=None, thresh_perc=None):
+def get_peaks(im, particle_size=3, thresh_abs=None, thresh_perc=None, border=0):
     """
     Find local maxima in pixel intensity.  Designed for use
     with images containing particles of a given size.
@@ -169,6 +175,9 @@ def get_peaks(im, particle_size=3, thresh_abs=None, thresh_perc=None):
         Only pixels with intensities above the thresh_perc
         percentile are considered.  Default = 70.  Ignored if
         thresh_abs is not None.
+    border : int, default 0
+        Peaks within distance border from the edge of the image are
+        deleted.
 
     Returns
     -------
@@ -183,12 +192,15 @@ def get_peaks(im, particle_size=3, thresh_abs=None, thresh_perc=None):
         else:
             thresh_abs = np.percentile(im, thresh_perc)
 
-    return skimage.feature.peak_local_max(
+    peaks =  skimage.feature.peak_local_max(
         im, min_distance=particle_size, threshold_abs=thresh_abs, indices=False,
         exclude_border=True)
 
+    return skimage.segmentation.clear_border(peaks, buffer_size=border)
 
-def get_all_peaks(ic, particle_size=3, thresh_abs=None, thresh_perc=None):
+
+def get_all_peaks(ic, particle_size=3, thresh_abs=None, thresh_perc=None,
+                  border=0):
     """
     Find local maxima in pixel intensity for each image in a list of
     images. Designed for use with images containing particles of a
@@ -208,6 +220,9 @@ def get_all_peaks(ic, particle_size=3, thresh_abs=None, thresh_perc=None):
         Only pixels with intensities above the thresh_perc
         percentile are considered.  Default = 70.  Ignored if
         thresh_abs is not None.
+    border : int, default 0
+        Peaks within distance border from the edge of the image are
+        deleted.
 
     Returns
     -------
@@ -216,8 +231,8 @@ def get_all_peaks(ic, particle_size=3, thresh_abs=None, thresh_perc=None):
         represented by True values.
     """
 
-    return [get_peaks(im, particle_size=3, thresh_abs=None, thresh_perc=None)
-                for im in ic]
+    return [get_peaks(im, particle_size=3, thresh_abs=None,
+                      thresh_perc=None, border=border) for im in ic]
 
 
 def peak_rois(peaks, r):
@@ -254,9 +269,9 @@ def peak_rois(peaks, r):
     return rois
 
 
-def filter_rois(im, rois, thresh_std=(1, 1)):
+def filter_rois_intensity(im, rois, thresh_std=(1, 1)):
     """
-    Draw square ROIs around peaks.
+    Determine which ROIs are worth keeping based on intensity.
 
     Parameters
     ----------
@@ -274,8 +289,6 @@ def filter_rois(im, rois, thresh_std=(1, 1)):
     -------
     filtered_rois : list of slice objects
         List of ROIs to consider in analysis
-    fiducial_rois : list of slice objects
-        List of ROIs to use for fiducial markers
     """
 
     # Comute intensities in ROI
@@ -288,6 +301,25 @@ def filter_rois(im, rois, thresh_std=(1, 1)):
     # Only keep ROIs with intensity within threshold
     return [roi for i, roi in enumerate(rois)
                     if roi_ints[i] < thresh_high and roi_ints[i] > thresh_low]
+
+
+def filter_rois_peaks(peaks, rois):
+    """
+    Only keep ROIs with single beads.
+
+    Parameters
+    ----------
+    peaks : ndarray
+        A binary image, True if the pixel is at a peak, False otherwise
+    rois : list of slice objects
+        List of ROIs to consider.
+
+    Returns
+    -------
+    filtered_rois : list of slice objects
+        List of ROIs to consider in analysis
+    """
+    return [roi for roi in rois if peaks[roi].sum() == 1]
 
 
 def n_peaks_in_rois(peaks, rois):
@@ -379,7 +411,7 @@ def all_bead_loss(t, n_peaks_all, n_frames=5, frac=0.75):
     loss_times = [detect_bead_loss(t, n_peaks, n_frames=n_frames, frac=frac)
                         for n_peaks in n_peaks_all]
     loss_times = np.array(loss_times)
-    return np.nonzero(loss_times != -1)[0], loss_times[loss_times != -1]
+    return loss_times[loss_times != -1], np.nonzero(loss_times != -1)[0]
 
 
 def centroid_mag(im):
