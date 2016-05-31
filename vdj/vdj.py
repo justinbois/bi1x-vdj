@@ -231,8 +231,8 @@ def get_all_peaks(ic, particle_size=3, thresh_abs=None, thresh_perc=None,
         represented by True values.
     """
 
-    return [get_peaks(im, particle_size=3, thresh_abs=None,
-                      thresh_perc=None, border=border) for im in ic]
+    return [get_peaks(im, particle_size=3, thresh_abs=thresh_abs,
+                      thresh_perc=thresh_perc, border=border) for im in ic]
 
 
 def peak_rois(peaks, r):
