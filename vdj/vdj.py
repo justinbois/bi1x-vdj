@@ -20,7 +20,7 @@ def good_frames(ic, frac_diff=0.95, bad_frames=[], return_covs=False):
         Frames whose coefficient of variation is less than frac_diff
         times the mean of the coefficient of variation of all frames
         are considered bad.
-    bad_frame : list, default []
+    bad_frames : list, default []
         List of indices of frames that are known to be bad.
     return_covs : bool
         If True, also return coefficients of varation of frames.
